@@ -21,5 +21,5 @@
         "backup:vm",
         "firewall:proxy"
     ],
-    "provides": ["cms"]
+    "provides": ["wordpress"]
 }
