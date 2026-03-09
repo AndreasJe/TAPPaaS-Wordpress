@@ -1,25 +1,145 @@
-{ config, pkgs, lib, ... }:
+# Copyright (c) 2025 TAPPaaS org
+#
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+# ============================================================================
+# TAPPaaS - WordPress CMS
+# ============================================================================
+# Version: 0.2.0
+# Date: 2026-03-08
+#
+# Architecture:
+# - WordPress (PHP-FPM) via Podman container
+# - Nginx reverse proxy (port 8080)
+# - MariaDB 11.x backend
+# - Redis object cache (named instance, port 6380)
+# - Secrets auto-generated on first boot
+#
+# Network: SRV zone (VLAN 210, 10.2.10.0/24)
+# Firewall: ports 22 (SSH) + 8080 (WordPress HTTP)
+# Secrets: Auto-generated on first boot at /etc/secrets/wordpress.env
+# Backups: Daily DB dump + file archive, 30-day retention
+# ============================================================================
+
+{ config, lib, pkgs, modulesPath, ... }:
 
 let
   versions = {
     wordpress = "6.7-fpm";
   };
-
   secretsFile = "/etc/secrets/wordpress.env";
+in
+{
 
-in {
+  # ==========================================================================
+  # IMPORTS
+  # ==========================================================================
 
-  # ── Networking ────────────────────────────────────────────────────────────
-  services.cloud-init.enable = true;
-  services.qemuGuest.enable  = true;
-  boot.growPartition         = true;
+  imports = [
+    /etc/nixos/hardware-configuration.nix
+  ];
 
-  networking.firewall.allowedTCPPorts = [ 8080 ];
+  # ==========================================================================
+  # BOOT
+  # ==========================================================================
 
+  boot.loader.systemd-boot.enable      = lib.mkDefault true;
+  boot.loader.efi.canTouchEfiVariables = lib.mkDefault true;
+  boot.growPartition                   = lib.mkDefault true;
 
-  # ── Nginx ─────────────────────────────────────────────────────────────────
-  # Fronts PHP-FPM via FastCGI. Serves static assets directly with long-lived
-  # cache headers, bypassing PHP entirely for images, CSS, JS, fonts.
+  # ==========================================================================
+  # CLOUD-INIT
+  # ==========================================================================
+
+  services.cloud-init = {
+    enable         = true;
+    network.enable = false;
+  };
+
+  # ==========================================================================
+  # NETWORKING
+  # ==========================================================================
+
+  networking.hostName = lib.mkDefault "wordpress";
+  networking.networkmanager.enable = true;
+  networking.networkmanager.ensureProfiles.profiles.tappaas-ethernet = {
+    connection = { id = "tappaas-ethernet"; type = "ethernet"; autoconnect = "true"; autoconnect-priority = "100"; };
+    ipv4       = { method = "auto"; };
+    ipv6       = { method = "auto"; addr-gen-mode = "default"; };
+  };
+
+  systemd.network.enable             = lib.mkForce false;
+  systemd.network.wait-online.enable = lib.mkForce false;
+
+  systemd.services."serial-getty@ttyS0" = {
+    enable            = true;
+    wantedBy          = [ "getty.target" ];
+    serviceConfig.Restart = "always";
+  };
+
+  networking.firewall = {
+    enable          = true;
+    allowedTCPPorts = [ 22 8080 ];
+  };
+
+  # ==========================================================================
+  # TIME ZONE
+  # ==========================================================================
+
+  time.timeZone = lib.mkDefault "Europe/Amsterdam";
+
+  # ==========================================================================
+  # USERS & SECURITY
+  # ==========================================================================
+
+  users.users.tappaas = {
+    isNormalUser = true;
+    extraGroups  = [ "wheel" "networkmanager" ];
+  };
+
+  security.sudo.wheelNeedsPassword = false;
+
+  # ==========================================================================
+  # NIX SETTINGS
+  # ==========================================================================
+
+  nix.settings.trusted-users         = [ "root" "@wheel" ];
+  nix.settings.experimental-features = [ "nix-command" "flakes" ];
+  nixpkgs.config.allowUnfree          = true;
+
+  nix.gc = {
+    automatic = true;
+    dates     = "weekly";
+    options   = "--delete-older-than 30d";
+  };
+
+  nix.optimise = {
+    automatic = true;
+    dates     = [ "weekly" ];
+  };
+
+  # ==========================================================================
+  # ESSENTIAL SERVICES
+  # ==========================================================================
+
+  services.qemuGuest.enable = true;
+
+  services.openssh = {
+    enable   = true;
+    settings = {
+      PasswordAuthentication = false;
+      PermitRootLogin        = "no";
+    };
+  };
+
+  programs.ssh.startAgent = true;
+
+  # ==========================================================================
+  # NGINX
+  # ==========================================================================
+
   services.nginx = {
     enable = true;
     virtualHosts."wordpress" = {
@@ -45,21 +165,23 @@ in {
     };
   };
 
-  # PHP-FPM — dynamic pool, max_children = vCPU × 2 for I/O-bound workloads.
-  # OPcache keeps compiled PHP bytecode in memory, eliminating parse overhead.
+  # ==========================================================================
+  # PHP-FPM
+  # ==========================================================================
+
   services.phpfpm.pools.wordpress = {
     user       = "nginx";
     group      = "nginx";
     phpPackage = pkgs.php83;
     settings = {
-      "listen"               = "/run/phpfpm/wordpress.sock";
-      "listen.owner"         = "nginx";
-      "listen.group"         = "nginx";
-      "pm"                   = "dynamic";
-      "pm.max_children"      = 8;
-      "pm.start_servers"     = 2;
-      "pm.min_spare_servers" = 2;
-      "pm.max_spare_servers" = 4;
+      "listen"                                         = "/run/phpfpm/wordpress.sock";
+      "listen.owner"                                   = "nginx";
+      "listen.group"                                   = "nginx";
+      "pm"                                             = "dynamic";
+      "pm.max_children"                                = 8;
+      "pm.start_servers"                               = 2;
+      "pm.min_spare_servers"                           = 2;
+      "pm.max_spare_servers"                           = 4;
       "php_admin_value[opcache.enable]"                = 1;
       "php_admin_value[opcache.memory_consumption]"    = 128;
       "php_admin_value[opcache.max_accelerated_files]" = 4000;
@@ -67,30 +189,28 @@ in {
     };
   };
 
+  # ==========================================================================
+  # SECRETS - auto-generated on first boot
+  # ==========================================================================
 
-  # ── Secrets — auto-generated on first boot ────────────────────────────────
   systemd.services.generate-wordpress-secrets = {
     description = "Generate WordPress secret keys and DB password";
     wantedBy    = [ "multi-user.target" ];
+    after       = [ "local-fs.target" ];
     before      = [ "mysql.service" "wordpress-container.service" ];
+    unitConfig.ConditionPathExists = "!${secretsFile}";
     serviceConfig = {
       Type            = "oneshot";
       RemainAfterExit = true;
-    };
-    script = ''
-      if [ ! -f ${secretsFile} ]; then
+      ExecStart = pkgs.writeShellScript "generate-wordpress-secrets" ''
         mkdir -p /etc/secrets
         cat > ${secretsFile} <<EOF
-# WordPress runtime secrets — generated $(date -Iseconds)
-# Set DOMAIN to match your Caddy hostname before first run.
-
+# WordPress runtime secrets - generated on first boot
 DOMAIN=https://wordpress.yourdomain.example
-
 WORDPRESS_DB_HOST=127.0.0.1
 WORDPRESS_DB_NAME=wordpress
 WORDPRESS_DB_USER=wordpress
 WORDPRESS_DB_PASSWORD=$(${pkgs.openssl}/bin/openssl rand -base64 24)
-
 WORDPRESS_AUTH_KEY=$(${pkgs.openssl}/bin/openssl rand -base64 48)
 WORDPRESS_SECURE_AUTH_KEY=$(${pkgs.openssl}/bin/openssl rand -base64 48)
 WORDPRESS_LOGGED_IN_KEY=$(${pkgs.openssl}/bin/openssl rand -base64 48)
@@ -101,32 +221,14 @@ WORDPRESS_LOGGED_IN_SALT=$(${pkgs.openssl}/bin/openssl rand -base64 48)
 WORDPRESS_NONCE_SALT=$(${pkgs.openssl}/bin/openssl rand -base64 48)
 EOF
         chmod 600 ${secretsFile}
-
-        cat > /etc/secrets/wordpress-template.env <<'TMPL'
-DOMAIN=https://wordpress.<yourdomain>
-WORDPRESS_DB_HOST=127.0.0.1
-WORDPRESS_DB_NAME=wordpress
-WORDPRESS_DB_USER=wordpress
-WORDPRESS_DB_PASSWORD=<generated>
-WORDPRESS_AUTH_KEY=<generated>
-WORDPRESS_SECURE_AUTH_KEY=<generated>
-WORDPRESS_LOGGED_IN_KEY=<generated>
-WORDPRESS_NONCE_KEY=<generated>
-WORDPRESS_AUTH_SALT=<generated>
-WORDPRESS_SECURE_AUTH_SALT=<generated>
-WORDPRESS_LOGGED_IN_SALT=<generated>
-WORDPRESS_NONCE_SALT=<generated>
-TMPL
-        chmod 644 /etc/secrets/wordpress-template.env
-      fi
-    '';
+      '';
+    };
   };
 
+  # ==========================================================================
+  # MARIADB
+  # ==========================================================================
 
-  # ── MariaDB ───────────────────────────────────────────────────────────────
-  # innodb_buffer_pool: cache hot data/indexes in RAM, sized for 2GB VM.
-  # query_cache: effective for read-heavy WP sites with repeated queries.
-  # slow_query_log: disable once initial tuning is complete.
   services.mysql = {
     enable  = true;
     package = pkgs.mariadb;
@@ -162,39 +264,44 @@ TMPL
     serviceConfig = {
       Type            = "oneshot";
       RemainAfterExit = true;
-    };
-    script = ''
-      source ${secretsFile}
-      ${pkgs.mariadb}/bin/mysql -u root <<SQL
-        ALTER USER 'wordpress'@'localhost' IDENTIFIED BY '$WORDPRESS_DB_PASSWORD';
-        FLUSH PRIVILEGES;
+      ExecStart = pkgs.writeShellScript "wordpress-db-password-sync" ''
+        source ${secretsFile}
+        ${pkgs.mariadb}/bin/mysql -u root <<SQL
+          ALTER USER 'wordpress'@'localhost' IDENTIFIED BY '$WORDPRESS_DB_PASSWORD';
+          FLUSH PRIVILEGES;
 SQL
-    '';
+      '';
+    };
   };
 
+  # ==========================================================================
+  # REDIS
+  # ==========================================================================
 
-  # ── Redis ─────────────────────────────────────────────────────────────────
-  # Named instance on port 6380. Serves both WP object cache (Redis Object
-  # Cache plugin) and full-page cache (W3 Total Cache / WP Super Cache).
-  # 256mb covers both layers; allkeys-lru evicts cold keys under pressure.
   services.redis.servers.wordpress = {
-    enable          = true;
-    port            = 6380;
-    maxmemory       = "256mb";
-    maxmemoryPolicy = "allkeys-lru";
-    save            = [];
+    enable   = true;
+    port     = 6380;
+    settings = {
+      maxmemory        = 268435456;
+      maxmemory-policy = "allkeys-lru";
+      save             = "";
+    };
   };
 
+  # ==========================================================================
+  # WORDPRESS CONTAINER
+  # ==========================================================================
 
-  # ── WordPress container ───────────────────────────────────────────────────
   virtualisation.podman.enable = true;
 
   systemd.tmpfiles.rules = [
-    "d /var/lib/wordpress 0750 nginx nginx -"
+    "d /var/lib/wordpress         0750 nginx nginx -"
+    "d /var/backup/wordpress-db   0700 root  root  -"
+    "d /var/backup/wordpress-data 0700 root  root  -"
   ];
 
   systemd.services.wordpress-container = {
-    description = "WordPress Podman container (PHP-FPM)";
+    description = "WordPress via Podman (PHP-FPM)";
     after = [
       "network.target"
       "mysql.service"
@@ -206,7 +313,7 @@ SQL
     wantedBy = [ "multi-user.target" ];
     serviceConfig = {
       ExecStartPre = "${pkgs.podman}/bin/podman pull docker.io/wordpress:${versions.wordpress}";
-      ExecStart = ''
+      ExecStart    = ''
         ${pkgs.podman}/bin/podman run --rm \
           --name wordpress \
           --network host \
@@ -218,20 +325,18 @@ SQL
           docker.io/wordpress:${versions.wordpress}
       '';
 
-      # ── OPTION: Authentik SSO for wp-admin ────────────────────────────
+      # ── OPTION: Authentik SSO for wp-admin ──────────────────────────────
       #
-      # Use this when admins and editors should authenticate via Authentik
-      # (OIDC). Public users (readers, commenters) continue using native
-      # WordPress accounts — no change needed for them.
+      # Use when admins/editors should authenticate via Authentik (OIDC).
+      # Public users (readers, commenters) use native WordPress accounts.
       #
       # Prerequisites:
       #   1. Create an OAuth2/OIDC provider in Authentik named "wordpress"
-      #   2. Map Authentik groups to WP roles (see INSTALL.md — Authentication)
+      #   2. Map Authentik groups to WP roles (see INSTALL.md - Authentication)
       #   3. Install "OpenID Connect Generic Client" plugin in WordPress
       #   4. Fill OIDC_* values in /etc/secrets/wordpress.env
       #   5. Uncomment the env vars below and run: nixos-rebuild switch
-      #   6. Once confirmed working, disable the native WP login form via
-      #      the plugin settings to prevent password-based admin bypass.
+      #   6. Disable the native WP login form via the plugin settings
       #
       # -e OIDC_CLIENT_ID=wordpress \
       # -e OIDC_CLIENT_SECRET=<from Authentik provider> \
@@ -246,60 +351,75 @@ SQL
     };
   };
 
+  # ==========================================================================
+  # BACKUPS
+  # ==========================================================================
 
-  # ── Backups ───────────────────────────────────────────────────────────────
-
-  # MariaDB dump — daily 02:00
   systemd.services.backup-wordpress-db = {
     description = "Daily MariaDB dump for WordPress";
-    serviceConfig.Type = "oneshot";
-    script = ''
-      mkdir -p /var/backup/wordpress-db
-      ${pkgs.mariadb}/bin/mysqldump --single-transaction --routines wordpress \
-        | ${pkgs.gzip}/bin/gzip > /var/backup/wordpress-db/wordpress-$(date +%Y%m%d).sql.gz
-    '';
+    serviceConfig = {
+      Type      = "oneshot";
+      ExecStart = pkgs.writeShellScript "backup-wordpress-db" ''
+        ${pkgs.mariadb}/bin/mysqldump --single-transaction --routines wordpress \
+          | ${pkgs.gzip}/bin/gzip > /var/backup/wordpress-db/wordpress-$(date +%Y%m%d).sql.gz
+      '';
+    };
   };
   systemd.timers.backup-wordpress-db = {
     wantedBy    = [ "timers.target" ];
     timerConfig = { OnCalendar = "02:00"; Persistent = true; };
   };
 
-  # File archive (uploads, themes, plugins) — daily 02:30
   systemd.services.backup-wordpress-data = {
     description = "Daily file archive for WordPress";
-    serviceConfig.Type = "oneshot";
-    script = ''
-      mkdir -p /var/backup/wordpress-data
-      ${pkgs.gnutar}/bin/tar czf \
-        /var/backup/wordpress-data/wordpress-$(date +%Y%m%d).tar.gz \
-        /var/lib/wordpress
-    '';
+    serviceConfig = {
+      Type      = "oneshot";
+      ExecStart = pkgs.writeShellScript "backup-wordpress-data" ''
+        ${pkgs.gnutar}/bin/tar czf \
+          /var/backup/wordpress-data/wordpress-$(date +%Y%m%d).tar.gz \
+          /var/lib/wordpress
+      '';
+    };
   };
   systemd.timers.backup-wordpress-data = {
     wantedBy    = [ "timers.target" ];
     timerConfig = { OnCalendar = "02:30"; Persistent = true; };
   };
 
-  # Cleanup backups older than 30 days — monthly
   systemd.services.backup-wordpress-cleanup = {
     description = "Remove WordPress backups older than 30 days";
-    serviceConfig.Type = "oneshot";
-    script = ''
-      ${pkgs.findutils}/bin/find /var/backup/wordpress-db   -mtime +30 -delete
-      ${pkgs.findutils}/bin/find /var/backup/wordpress-data -mtime +30 -delete
-    '';
+    serviceConfig = {
+      Type      = "oneshot";
+      ExecStart = pkgs.writeShellScript "backup-wordpress-cleanup" ''
+        ${pkgs.findutils}/bin/find /var/backup/wordpress-db   -mtime +30 -delete
+        ${pkgs.findutils}/bin/find /var/backup/wordpress-data -mtime +30 -delete
+      '';
+    };
   };
   systemd.timers.backup-wordpress-cleanup = {
     wantedBy    = [ "timers.target" ];
     timerConfig = { OnCalendar = "monthly"; Persistent = true; };
   };
 
+  # ==========================================================================
+  # SYSTEM PACKAGES
+  # ==========================================================================
 
-  # ── Packages ──────────────────────────────────────────────────────────────
   environment.systemPackages = with pkgs; [
+    vim
+    wget
+    curl
+    htop
+    git
+    jq
+    openssl
     mariadb
     podman
-    curl
-    wget
   ];
+
+  # ==========================================================================
+  # SYSTEM STATE VERSION - DO NOT CHANGE after initial install
+  # ==========================================================================
+
+  system.stateVersion = "25.05";
 }
