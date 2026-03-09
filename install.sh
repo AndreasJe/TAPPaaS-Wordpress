@@ -32,6 +32,12 @@ if [[ ! "${CONFIRM}" =~ ^[Yy]$ ]]; then
 fi
 echo ""
 
+# Write proxyDomain into the config JSON so firewall:proxy install-service.sh
+# picks it up when it runs caddy-manager later in the dependency chain.
+CONFIG_JSON="/home/tappaas/config/wordpress.json"
+jq --arg domain "${SITE_DOMAIN}" '. + {proxyDomain: $domain}' \
+    "${CONFIG_JSON}" > "${CONFIG_JSON}.tmp" && mv "${CONFIG_JSON}.tmp" "${CONFIG_JSON}"
+
 # ── Create the VM from wordpress.json ────────────────────────────────────
 . /home/tappaas/bin/install-vm.sh
 
