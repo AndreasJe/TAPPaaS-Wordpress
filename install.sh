@@ -32,33 +32,35 @@ if [[ ! "${CONFIRM}" =~ ^[Yy]$ ]]; then
 fi
 echo ""
 
-# Write proxyDomain into the config JSON so firewall:proxy install-service.sh
-# picks it up when it runs caddy-manager later in the dependency chain.
+# ── Write domain to VM and restart container ──────────────────────────────
+# VM is already provisioned by cluster:vm and templates:nixos (Step 4).
+# All we need to do is write the confirmed domain into the secrets file
+# on the VM and start the container.
+
 CONFIG_JSON="/home/tappaas/config/wordpress.json"
-jq --arg domain "${SITE_DOMAIN}" '. + {proxyDomain: $domain}' \
-    "${CONFIG_JSON}" > "${CONFIG_JSON}.tmp" && mv "${CONFIG_JSON}.tmp" "${CONFIG_JSON}"
+VMID="$(jq -r '.vmid' "${CONFIG_JSON}")"
+NODE="$(jq -r '.node' "${CONFIG_JSON}")"
 
-# ── Create the VM from wordpress.json ────────────────────────────────────
-. /home/tappaas/bin/install-vm.sh
+echo "  Getting VM IP address..."
+VM_IP="$(ssh tappaas@proxmox-"${NODE}" \
+    "qm guest exec ${VMID} -- ip -4 addr show ens18 2>/dev/null || true" 2>/dev/null \
+    | grep -oP '(?<=inet )\d+\.\d+\.\d+\.\d+' | head -1 || true)"
 
-IMAGE_TYPE="$(get_config_value 'imageType' 'clone')"
+# Fallback: resolve via internal DNS
+if [[ -z "${VM_IP}" ]]; then
+    VM_IP="$(getent hosts wordpress.srv.internal 2>/dev/null | awk '{print $1}' || true)"
+fi
 
-/home/tappaas/bin/update-os.sh "${VMNAME}" "${VMID}" "${NODE}"
+if [[ -z "${VM_IP}" ]]; then
+    echo "[ERROR] Could not determine VM IP. Write domain manually:"
+    echo "  sudo sed -i 's|DOMAIN=.*|DOMAIN=https://${SITE_DOMAIN}|' /etc/secrets/wordpress.env"
+    exit 1
+fi
 
-# ── Deploy NixOS module ───────────────────────────────────────────────────
-info "Deploying wordpress.nix to ${VMNAME}"
-scp wordpress.nix "root@${VMNAME}:/etc/nixos/wordpress.nix"
-ssh "root@${VMNAME}" bash << REMOTE
-  if ! grep -q "wordpress.nix" /etc/nixos/configuration.nix; then
-    sed -i "/imports = \[/a\\    ./wordpress.nix" /etc/nixos/configuration.nix
-  fi
-  nixos-rebuild switch
-  systemctl is-active --quiet generate-wordpress-secrets || \
-    systemctl start generate-wordpress-secrets
-  sleep 2
-  # Write the confirmed domain into secrets
-  sed -i "s|DOMAIN=.*|DOMAIN=https://${SITE_DOMAIN}|" /etc/secrets/wordpress.env
-  systemctl restart wordpress-container
-REMOTE
+echo "  Writing domain to VM (${VM_IP})..."
+ssh -o StrictHostKeyChecking=no "tappaas@${VM_IP}" \
+    "sudo sed -i 's|DOMAIN=.*|DOMAIN=https://${SITE_DOMAIN}|' /etc/secrets/wordpress.env && \
+     sudo systemctl restart wordpress-container"
 
-info "WordPress deployed at https://${SITE_DOMAIN}"
+echo ""
+echo "  ✓ WordPress deployed at https://${SITE_DOMAIN}"
