@@ -4,7 +4,7 @@
     "vmtag": "TAPPaaS,App",
     "vmname": "wordpress",
     "cores": 2,
-    "memory": "2048",
+    "memory": "4048",
     "diskSize": "50G",
     "storage": "tankb1",
     "imageType": "clone",
@@ -12,7 +12,7 @@
     "bridge0": "lan",
     "zone0": "srv",
     "description": "WordPress CMS — self-hosted content platform",
-    "maintainer": "@yourhandle",
+    "maintainer": "@AndreasJe",
     "releaseDate": "2026-03-08",
     "status": "Development",
     "dependsOn": [
@@ -22,5 +22,5 @@
         "identity:identity",
         "firewall:proxy"
     ],
-    "provides": ["cms"]
+    "provides": ["wordpress"]
 }
