@@ -7,8 +7,8 @@
 # ============================================================================
 # TAPPaaS - WordPress CMS
 # ============================================================================
-# Version: 0.2.0
-# Date: 2026-03-08
+# Version: 0.3.0
+# Date: 2026-03-09
 #
 # Architecture:
 # - WordPress (PHP-FPM) via Podman container
@@ -21,6 +21,11 @@
 # Firewall: ports 22 (SSH) + 8080 (WordPress HTTP)
 # Secrets: Auto-generated on first boot at /etc/secrets/wordpress.env
 # Backups: Daily DB dump + file archive, 30-day retention
+#
+# Changelog:
+#   0.3.0 - Fix syntax error (stray nginx block before let..in)
+#           Add index directive to nginx to fix /wp-admin/ 403
+#           Add /var/log/mysql tmpfiles rule to fix MariaDB slow log error
 # ============================================================================
 
 { config, lib, pkgs, modulesPath, ... }:
@@ -145,7 +150,9 @@ in
     virtualHosts."wordpress" = {
       listen = [{ addr = "0.0.0.0"; port = 8080; }];
       root   = "/var/lib/wordpress";
-      extraConfig = "index index.php index.html index.htm;";  # ← ADD THIS
+      # Fix: without this nginx returns 403 on directory requests (e.g. /wp-admin/)
+      # because it does not know to look for index.php inside subdirectories.
+      extraConfig = "index index.php index.html index.htm;";
       locations."/" = {
         tryFiles = "$uri $uri/ /index.php?$args";
       };
@@ -299,7 +306,7 @@ SQL
     "d /var/lib/wordpress         0750 nginx nginx -"
     "d /var/backup/wordpress-db   0700 root  root  -"
     "d /var/backup/wordpress-data 0700 root  root  -"
-    "d /var/log/mysql             0755 mysql mysql -" 
+    "d /var/log/mysql              0755 mysql mysql -"  # Fix: MariaDB slow log dir
   ];
 
   systemd.services.wordpress-container = {
