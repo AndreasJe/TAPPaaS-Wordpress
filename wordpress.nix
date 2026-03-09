@@ -9,6 +9,7 @@
 # ============================================================================
 # Version: 0.3.0
 # Date: 2026-03-09
+# Maintainer: @AndreasJe
 #
 # Architecture:
 # - WordPress (PHP-FPM) via Podman container
@@ -22,10 +23,6 @@
 # Secrets: Auto-generated on first boot at /etc/secrets/wordpress.env
 # Backups: Daily DB dump + file archive, 30-day retention
 #
-# Changelog:
-#   0.3.0 - Fix syntax error (stray nginx block before let..in)
-#           Add index directive to nginx to fix /wp-admin/ 403
-#           Add /var/log/mysql tmpfiles rule to fix MariaDB slow log error
 # ============================================================================
 
 { config, lib, pkgs, modulesPath, ... }:
