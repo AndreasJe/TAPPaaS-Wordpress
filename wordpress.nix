@@ -145,6 +145,7 @@ in
     virtualHosts."wordpress" = {
       listen = [{ addr = "0.0.0.0"; port = 8080; }];
       root   = "/var/lib/wordpress";
+      extraConfig = "index index.php index.html index.htm;";  # ← ADD THIS
       locations."/" = {
         tryFiles = "$uri $uri/ /index.php?$args";
       };
@@ -298,6 +299,7 @@ SQL
     "d /var/lib/wordpress         0750 nginx nginx -"
     "d /var/backup/wordpress-db   0700 root  root  -"
     "d /var/backup/wordpress-data 0700 root  root  -"
+    "d /var/log/mysql             0755 mysql mysql -" 
   ];
 
   systemd.services.wordpress-container = {
