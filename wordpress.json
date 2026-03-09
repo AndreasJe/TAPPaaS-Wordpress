@@ -6,7 +6,7 @@
     "cores": 2,
     "memory": "2048",
     "diskSize": "50G",
-    "storage": "tankc1",
+    "storage": "tankb1",
     "imageType": "clone",
     "image": "8080",
     "bridge0": "lan",
@@ -19,6 +19,7 @@
         "cluster:vm",
         "templates:nixos",
         "backup:vm",
+        "identity:identity",
         "firewall:proxy"
     ],
     "provides": ["cms"]

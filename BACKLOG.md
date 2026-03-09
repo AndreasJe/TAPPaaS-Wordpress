@@ -2,14 +2,14 @@
 
 ## Known limitations
 
-- **Manual deployment** — no automated VM creation yet; follow INSTALL.md step by step
-- **Single disk** — OS and data share one volume on tankc1; when TAPPaaS schema supports multi-disk VMs, split into OS disk (tanka1, 16G) and data disk (tankc1, 50G) for `/var/lib/wordpress` and `/var/lib/mysql`
-- **No SSO wired by default** — Authentik OIDC config is present in `wordpress.nix` but commented out; see INSTALL.md — Authentication
-- **DB password initialisation** — MariaDB `initialScript` uses a placeholder; synced on first boot via `wordpress-db-password-sync.service`
+- **Single disk** — OS and data share one volume on tankb1. When the TAPPaaS schema supports multi-disk VMs, split into an OS disk (tanka1, 16G) and a data disk (tankb1, 50G) mounting `/var/lib/wordpress` and `/var/lib/mysql` separately. Until then, disk failure takes both OS and data.
+
+- **Application backups are on-VM only** — MariaDB dumps and file archives write to `/var/backup/` on the same disk. Proxmox VM snapshots cover full restore, but granular content recovery (e.g. a single deleted post) depends on these dumps surviving. A disk failure loses both. Backups should be shipped off-VM to the TAPPaaS backup target.
+
+- **`identity:identity` not wired** — dependency declared but Authentik OIDC is not connected by default. See INSTALL.md — Authentication for setup steps.
 
 ## Future work
 
-- Cloud-init automation for zero-touch VM provisioning
 - Multi-disk schema support in `wordpress.json`
-- Caddy block auto-generated from `wordpress.json` `zone0` + `vmname`
+- Off-VM backup shipping for MariaDB dumps and file archives
 - WP-CLI integration for plugin/theme management without wp-admin
