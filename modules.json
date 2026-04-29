@@ -1,0 +1,18 @@
+{
+    "description": "TAPPaaS Community Module Registry",
+    "applicationModules": [
+        {
+            "moduleName": "unifi",
+            "vmid": 810,
+            "moduleJson": "src/network/unifi/unifi.json"
+        }
+        {
+            "moduleName": "wordpress",
+            "vmid": 820,
+            "moduleJson": "src/apps/wordpress/wordpress.json"
+        }
+    ],
+    "foundationModules": [],
+    "proxmoxTemplates": [],
+    "testModules": []
+}
