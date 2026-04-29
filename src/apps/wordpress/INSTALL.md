@@ -24,19 +24,19 @@ install-module.sh wordpress --node tappaas2
 
 ## Post-install configuration
 
-### 1. Complete the WordPress setup wizard
+### 1. Set the site domain
+
+During install, you'll be prompted for the public domain. This is written to the secrets file.
+
+### 2. Complete the WordPress setup wizard
 
 Open `https://wordpress.<yourdomain>` and follow the WordPress setup wizard.
 
-### 2. Caddy reverse proxy
+### 3. Caddy reverse proxy
 
 Configured automatically by `install-module.sh` via the `firewall:proxy` dependency. The proxy service wires `wordpress.<tappaas.domain>` → `wordpress.srv.internal:8080` via `caddy-manager` on OPNsense. No manual steps required.
 
 If `firewallType` is `NONE` in `firewall.json`, the install will print the equivalent manual configuration to apply on your own proxy.
-
-### 3. Complete setup wizard
-
-Open `https://wordpress.<yourdomain>` and follow the WordPress setup wizard.
 
 ## Verification
 
@@ -104,6 +104,8 @@ Admins and editors authenticate via your TAPPaaS Authentik instance. Native Word
 In wp-admin, install **OpenID Connect Generic Client** by daggerhart.
 
 **4. Fill in secrets**
+
+Secrets are auto-generated on first boot at `/etc/secrets/wordpress.env`. Edit as needed:
 
 ```bash
 sudo vim /etc/secrets/wordpress.env

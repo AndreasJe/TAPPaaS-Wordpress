@@ -46,9 +46,6 @@ redis-cli -p 6380 FLUSHALL   # clear cache (safe — rebuilt automatically)
 ```bash
 # View secrets
 sudo cat /etc/secrets/wordpress.env
-
-# View template (no real values)
-cat /etc/secrets/wordpress-template.env
 ```
 
 ## Backups

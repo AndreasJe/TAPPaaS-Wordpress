@@ -78,6 +78,11 @@ Retention: 30 days.
 ```bash
 install-module.sh wordpress        # install
 update-module.sh wordpress         # update
+```
+
+## Secrets
+
+All secrets (DB password, WordPress salts, keys) are auto-generated on first boot and stored in `/etc/secrets/wordpress.env`.
 delete-module.sh wordpress         # delete
 ```
 

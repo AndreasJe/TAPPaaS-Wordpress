@@ -7,8 +7,8 @@
 # ============================================================================
 # TAPPaaS - WordPress CMS
 # ============================================================================
-# Version: 0.3.0
-# Date: 2026-03-09
+# Version: 0.4.0
+# Date: 2026-04-29
 # Maintainer: @AndreasJe
 #
 # Architecture:
@@ -16,7 +16,6 @@
 # - Nginx reverse proxy (port 8080)
 # - MariaDB 11.x backend
 # - Redis object cache (named instance, port 6380)
-# - Secrets auto-generated on first boot
 #
 # Network: SRV zone (VLAN 210, 10.2.10.0/24)
 # Firewall: ports 22 (SSH) + 8080 (WordPress HTTP)
