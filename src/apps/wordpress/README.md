@@ -1,107 +1,48 @@
 # WordPress on TAPPaaS
 
-**Version:** 0.1.0
-**Status:** Development
+**Version:** 0.4.0 | **Status:** Development | **VMID:** 620 | **Zone:** dmz
 
-Self-hosted WordPress CMS on NixOS with MariaDB, Redis, PHP-FPM, and Nginx.
-
-## Stack
-
-| Component | Version | Notes |
-|-----------|---------|-------|
-| WordPress | 6.7-fpm | PHP-FPM image |
-| PHP       | 8.3     | OPcache enabled |
-| Nginx     | latest  | FastCGI proxy, static asset cache |
-| MariaDB   | 11.4    | utf8mb4, query cache |
-| Redis     | 7.x     | Object + full-page cache, port 6380 |
-| Podman    | 5.x     | Container runtime |
-| NixOS     | 25.05   | |
+Self-hosted WordPress CMS on NixOS — MariaDB, Redis, PHP-FPM, Nginx, Podman.
 
 ## Architecture
 
 ```
-┌──────────────────────────────────┐
-│  OPNsense / Caddy (dmz)          │
-│  wordpress.<tappaas.domain>      │
-│  → wordpress.srv.internal:8080   │
-│  Auto-wired via firewall:proxy   │
-└────────────────┬─────────────────┘
-                 │
-┌────────────────▼─────────────────┐
-│  Nginx :8080                     │
-│  Static assets served directly   │
-│  PHP → FastCGI socket            │
-└──────┬────────────────┬──────────┘
-       │                │
-┌──────▼──────┐  ┌──────▼──────────┐
-│  PHP-FPM    │  │  WordPress      │
-│  8 workers  │  │  Podman         │
-│  OPcache    │  │                 │
-└──────┬──────┘  └─────────────────┘
-       │
-┌──────▼──────────────────────────┐
-│  MariaDB :3306   Redis :6380    │
-│  localhost only  localhost only │
-└─────────────────────────────────┘
+Internet → OPNsense/Caddy (dmz) → wordpress.srv.internal:8080
+                                        │
+                                   Nginx :8080
+                                   ├── PHP-FPM (OPcache, 8 workers)
+                                   ├── WordPress container (Podman)
+                                   ├── MariaDB :3306 (localhost)
+                                   └── Redis :6380 (localhost)
 ```
 
-## Authentication
+Caddy reverse proxy wired automatically via `firewall:proxy`.
 
-| User type           | Auth method                               |
-|---------------------|-------------------------------------------|
-| Admins / Editors    | Authentik OIDC (optional, see INSTALL.md) |
-| Public / Commenters | Native WordPress accounts                 |
-
-## VM Specifications
+## VM specs
 
 | Resource | Value |
 |----------|-------|
-| vCPU     | 2 (4 recommended for production) |
-| Memory   | 2 GB (4 GB recommended) |
-| Disk     | 50 GB on tankc1 |
-| Network  | srv zone |
-| VMID     | 620 |
+| vCPU     | 2 |
+| Memory   | 2 GB |
+| Disk     | 20G on tanka1 |
+| Network  | dmz zone (`wordpress.dmz.internal`) |
 
-## Backups
+## Renaming
 
-| What         | Schedule               | Location                    |
-|--------------|------------------------|-----------------------------|
-| MariaDB dump | Daily 02:00            | /var/backup/wordpress-db/   |
-| File archive | Daily 02:30            | /var/backup/wordpress-data/ |
-| VM snapshot  | Per backup:vm schedule | Proxmox                     |
-| Cleanup      | Monthly                | All backup dirs             |
-
-Retention: 30 days.
+Change `vmName` in `wordpress.nix` and `vmname` in `wordpress.json` — hostname, unit names, socket paths, data dirs, and DB all derive from it.
 
 ## Lifecycle
 
 ```bash
-install-module.sh wordpress        # install
-update-module.sh wordpress         # update
+install-module.sh wordpress
+update-module.sh wordpress
+delete-module.sh wordpress
 ```
 
 ## Secrets
 
-All secrets (DB password, WordPress salts, keys) are auto-generated on first boot and stored in `/etc/secrets/wordpress.env`.
-delete-module.sh wordpress         # delete
-```
-
-## Management
-
-```bash
-# Health check
-./test.sh
-
-# Service status
-systemctl status wordpress-container nginx mysql redis-wordpress
-
-# Logs
-journalctl -u wordpress-container -f
-
-# Restart
-systemctl restart wordpress-container
-```
+Auto-generated on first boot at `/etc/secrets/<vmname>.env` (mode 600).
 
 ## License
 
-Mozilla Public License 2.0 — see [LICENSE](LICENSE)
+Mozilla Public License 2.0

@@ -1,117 +1,88 @@
-# WordPress — Installation Guide
+# WordPress — Installation
 
 ## Prerequisites
 
-- TAPPaaS cluster running with `firewall:proxy` (Caddy) and `backup:vm` operational
-- DNS record `wordpress.<yourdomain>` pointing to your Caddy VM
-- VM 620 available in Proxmox
+- `firewall:proxy` and `backup:vm` operational
+- VMID 620 free in Proxmox
+- DNS record pointing `wordpress.<yourdomain>` to Caddy
 
 ## Install
 
-From the tappaas-cicd command line:
-
 ```bash
+cd /home/tappaas/TAPPaaS/src/apps/wordpress
 install-module.sh wordpress
 ```
 
-This validates all `dependsOn` services, wires them, then calls `install.sh`. `install.sh` sources `install-vm.sh` to create the VM from `wordpress.json`, runs `update-os.sh`, then deploys `wordpress.nix` and applies the NixOS configuration — all from the cicd host without manual SSH steps.
+`install-module.sh` provisions the VM via `cluster:vm`, wires all `dependsOn` services, then calls `install.sh`. `install.sh` prompts for the public domain and writes it to `/etc/secrets/wordpress.env` on the VM.
 
-To override the target node:
+Override node or VMID:
 
 ```bash
 install-module.sh wordpress --node tappaas2
+install-module.sh wordpress --vmid 621
 ```
 
-## Post-install configuration
+### Renaming before install
 
-### 1. Set the site domain
+Edit two lines before running `install-module.sh`:
 
-During install, you'll be prompted for the public domain. This is written to the secrets file.
+- `wordpress.nix`: `vmName = "myblog";`
+- `wordpress.json`: `"vmname": "myblog"`
 
-### 2. Complete the WordPress setup wizard
+## Post-install
 
-Open `https://wordpress.<yourdomain>` and follow the WordPress setup wizard.
+1. Open `https://wordpress.<yourdomain>` and complete the WordPress setup wizard.
+2. Caddy is already wired — no manual proxy steps needed.
 
-### 3. Caddy reverse proxy
-
-Configured automatically by `install-module.sh` via the `firewall:proxy` dependency. The proxy service wires `wordpress.<tappaas.domain>` → `wordpress.srv.internal:8080` via `caddy-manager` on OPNsense. No manual steps required.
-
-If `firewallType` is `NONE` in `firewall.json`, the install will print the equivalent manual configuration to apply on your own proxy.
-
-## Verification
+## Verify
 
 ```bash
-./test.sh
+./test.sh wordpress
 ```
-
----
 
 ## Update
 
 ```bash
-update-module.sh wordpress
-```
-
-To also pull a new WordPress container image:
-
-```bash
-update-module.sh wordpress  # runs update.sh
-# then on the VM:
-./update.sh --container
+update-module.sh wordpress                   # deploy NixOS config changes
+./update.sh wordpress --container            # also pull new WordPress image
 ```
 
 ## Delete
 
 ```bash
 delete-module.sh wordpress
-```
-
-Stops all services and removes the NixOS module before VM teardown. Use `--force` to bypass reverse-dependency checks if other modules depend on `cms`.
-
-```bash
-delete-module.sh wordpress --force
+delete-module.sh wordpress --force           # bypass reverse-dependency checks
 ```
 
 ---
 
-## Authentication
+## Authentik SSO (optional)
 
-Two models are supported and can coexist.
+Admins and editors only. Public/commenter accounts use native WordPress login.
 
-### Native WordPress accounts (default)
-
-Active out of the box. Used for public users, readers, and commenters. No configuration needed.
-
-### Authentik SSO for admins and editors
-
-Admins and editors authenticate via your TAPPaaS Authentik instance. Native WordPress login remains active for public/commenter accounts.
-
-**1. Create an OIDC provider in Authentik**
+**1. Create OIDC provider in Authentik**
 
 - Name: `wordpress`
 - Redirect URI: `https://wordpress.<yourdomain>/wp-admin/admin-ajax.php?action=openid-connect-authorize`
-- Note the Client ID and Client Secret
 
-**2. Create group mappings in Authentik**
+**2. Group mappings**
 
-| Authentik group      | WordPress role |
-|----------------------|----------------|
-| wordpress-admins     | Administrator  |
-| wordpress-editors    | Editor         |
+| Authentik group   | WordPress role |
+|-------------------|----------------|
+| wordpress-admins  | Administrator  |
+| wordpress-editors | Editor         |
 
-**3. Install the WordPress plugin**
+**3. Install plugin**
 
-In wp-admin, install **OpenID Connect Generic Client** by daggerhart.
+In wp-admin: **OpenID Connect Generic Client** by daggerhart.
 
-**4. Fill in secrets**
-
-Secrets are auto-generated on first boot at `/etc/secrets/wordpress.env`. Edit as needed:
+**4. Fill OIDC secrets**
 
 ```bash
 sudo vim /etc/secrets/wordpress.env
 ```
 
-Uncomment and fill:
+Add:
 
 ```
 OIDC_CLIENT_ID=wordpress
@@ -122,39 +93,15 @@ OIDC_ENDPOINT_USERINFO_URL=https://authentik.<domain>/application/o/wordpress/us
 OIDC_ENDPOINT_LOGOUT_URL=https://authentik.<domain>/application/o/wordpress/end-session
 ```
 
-**5. Enable in wordpress.nix and apply**
+**5. Enable in `wordpress.nix`**
 
-Uncomment the `OIDC_*` env var block in `wordpress.nix` and run:
+Uncomment the `OIDC_*` env var block in the container service, then:
 
 ```bash
 update-module.sh wordpress
 ```
 
-**6. Disable native login for admin accounts**
-
-Once SSO is confirmed working, enable "Disable WordPress login form for SSO users" in the plugin settings. Public/commenter accounts are unaffected.
-
----
-
-## Performance notes
-
-The following are enabled by default and require no configuration:
-
-- **PHP-FPM** — `wordpress:6.7-fpm` image, dynamic pool (max 8 workers)
-- **OPcache** — PHP bytecode cached in memory, 128MB
-- **Nginx** — serves static assets directly with 1-year cache headers
-- **Redis** — 256MB object + full-page cache on port 6380
-- **MariaDB query cache** — 64MB, effective for read-heavy sites
-
-To enable full-page caching, install **W3 Total Cache** or **WP Super Cache** in wp-admin and point it at Redis `127.0.0.1:6380`.
-
-Disable the slow query log once initial tuning is complete:
-
-```nix
-slow_query_log = 0;
-```
-
-Then run `update-module.sh wordpress`.
+**6. Disable native login for admin accounts** in the plugin settings once SSO is confirmed.
 
 ---
 
@@ -167,20 +114,14 @@ wordpress = "6.8-fpm";
 ```
 
 ```bash
-update-module.sh wordpress
+./update.sh wordpress --container
 ```
 
 ## Backup & restore
 
-Backups run automatically:
+Backups at `/var/backup/<vmname>-db/` and `/var/backup/<vmname>-data/`, retained 30 days.
 
-- `/var/backup/wordpress-db/` — gzipped SQL dumps, daily 02:00
-- `/var/backup/wordpress-data/` — gzipped file archives, daily 02:30
-- Both retained 30 days
-
-Full VM snapshots are handled by `backup:vm` in Proxmox.
-
-**Restore:**
+Restore:
 
 ```bash
 systemctl stop wordpress-container
@@ -189,9 +130,20 @@ tar xzf /var/backup/wordpress-data/wordpress-YYYYMMDD.tar.gz -C /
 systemctl start wordpress-container
 ```
 
-## Security notes
+## Performance tuning
 
-- Secrets auto-generated on first boot, stored in `/etc/secrets/wordpress.env` (mode 600)
-- WordPress security keys must not be changed after the site is live — doing so invalidates all active sessions
-- MariaDB and Redis bound to `127.0.0.1` only
-- WordPress not directly internet-exposed — all traffic via Caddy in the proxy zone
+Enabled by default — no config needed:
+
+- PHP-FPM dynamic pool, max 8 workers
+- OPcache 128MB
+- Nginx static asset cache (1-year headers)
+- Redis 256MB object cache on port 6380
+- MariaDB query cache 64MB
+
+For full-page caching, install **W3 Total Cache** or **WP Super Cache** in wp-admin and point Redis at `127.0.0.1:6380`.
+
+Disable slow query log once tuned:
+
+```nix
+slow_query_log = 0;
+```

@@ -2,14 +2,14 @@
 
 ## Known limitations
 
-- **Single disk** — OS and data share one volume on tankb1. When the TAPPaaS schema supports multi-disk VMs, split into an OS disk (tanka1, 16G) and a data disk (tankb1, 50G) mounting `/var/lib/wordpress` and `/var/lib/mysql` separately. Until then, disk failure takes both OS and data.
+- **Single disk** — OS and data share one volume on tanka1. When the TAPPaaS schema supports multi-disk VMs, split into OS disk (tanka1, 16G) and data disk (50G+) mounting `/var/lib/<vmname>` and `/var/lib/mysql` separately.
 
-- **Application backups are on-VM only** — MariaDB dumps and file archives write to `/var/backup/` on the same disk. Proxmox VM snapshots cover full restore, but granular content recovery (e.g. a single deleted post) depends on these dumps surviving. A disk failure loses both. Backups should be shipped off-VM to the TAPPaaS backup target.
+- **Application backups are on-VM only** — DB dumps and file archives write to `/var/backup/` on the same disk. Proxmox VM snapshots cover full restore, but granular recovery depends on these dumps surviving a disk failure. Backups should be shipped off-VM to the TAPPaaS backup target.
 
-- **`identity:identity` not wired** — dependency declared but Authentik OIDC is not connected by default. See INSTALL.md — Authentication for setup steps.
+- **`identity:identity` not wired** — dependency declared but Authentik OIDC is not connected by default. See INSTALL.md — Authentik SSO.
 
 ## Future work
 
-- Multi-disk schema support in `wordpress.json`
-- Off-VM backup shipping for MariaDB dumps and file archives
+- Multi-disk schema support
+- Off-VM backup shipping for DB dumps and file archives
 - WP-CLI integration for plugin/theme management without wp-admin

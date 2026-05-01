@@ -1,66 +1,102 @@
 #!/usr/bin/env bash
+#
+# TAPPaaS WordPress Module Installation
+#
+# Prompts for the public domain, writes it into the VM secrets file,
+# and starts the WordPress container. The VM is already provisioned by
+# cluster:vm / templates:nixos before this script is called.
+#
+# Usage: install.sh <vmname>
+# Example: install.sh wordpress
+#
+
 set -euo pipefail
 
-# ── Domain prompt ─────────────────────────────────────────────────────────
-# Ask for the public domain before any VM work starts, so the operator
-# can confirm before a long install begins.
+SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+readonly SCRIPT_NAME
 
-TAPPAAS_DOMAIN=$(jq -r '.tappaas.domain // empty' /home/tappaas/config/configuration.json 2>/dev/null || true)
-DEFAULT_DOMAIN="wordpress.${TAPPAAS_DOMAIN:-yourdomain.example}"
+# shellcheck source=../../foundation/tappaas-cicd/scripts/common-install-routines.sh
+. /home/tappaas/bin/common-install-routines.sh
 
-echo ""
-echo "  WordPress public domain"
-echo "  ────────────────────────────────────────────"
-echo "  This will be the URL users access WordPress on."
-echo "  Default: ${DEFAULT_DOMAIN}"
-echo ""
-read -rp "  Domain [${DEFAULT_DOMAIN}]: " INPUT_DOMAIN
-SITE_DOMAIN="${INPUT_DOMAIN:-${DEFAULT_DOMAIN}}"
+# ── Configuration ──────────────────────────────────────────────────────
 
-echo ""
-echo "  ┌──────────────────────────────────────────┐"
-echo "  │  Site domain : https://${SITE_DOMAIN}"
-echo "  │  Upstream    : wordpress.srv.internal"
-echo "  │  Caddy wiring: auto via firewall:proxy"
-echo "  └──────────────────────────────────────────┘"
-echo ""
-read -rp "  Confirm? [Y/n]: " CONFIRM
-CONFIRM="${CONFIRM:-Y}"
-if [[ ! "${CONFIRM}" =~ ^[Yy]$ ]]; then
-    echo "  Aborted."
-    exit 1
-fi
-echo ""
+VMNAME="$(get_config_value 'vmname' "${1:-}")"
+ZONE0NAME="$(get_config_value 'zone0' 'mgmt')"
+readonly VMNAME ZONE0NAME
 
-# ── Write domain to VM and restart container ──────────────────────────────
-# VM is already provisioned by cluster:vm and templates:nixos (Step 4).
-# All we need to do is write the confirmed domain into the secrets file
-# on the VM and start the container.
+VM_HOST="${VMNAME}.${ZONE0NAME}.internal"
+readonly VM_HOST
 
-CONFIG_JSON="/home/tappaas/config/wordpress.json"
-VMID="$(jq -r '.vmid' "${CONFIG_JSON}")"
-NODE="$(jq -r '.node' "${CONFIG_JSON}")"
+readonly SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes"
 
-echo "  Getting VM IP address..."
-VM_IP="$(ssh tappaas@proxmox-"${NODE}" \
-    "qm guest exec ${VMID} -- ip -4 addr show ens18 2>/dev/null || true" 2>/dev/null \
-    | grep -oP '(?<=inet )\d+\.\d+\.\d+\.\d+' | head -1 || true)"
+# ── Usage ──────────────────────────────────────────────────────────────
 
-# Fallback: resolve via internal DNS
-if [[ -z "${VM_IP}" ]]; then
-    VM_IP="$(getent hosts wordpress.srv.internal 2>/dev/null | awk '{print $1}' || true)"
-fi
+usage() {
+    cat << EOF
+Usage: ${SCRIPT_NAME} <vmname>
 
-if [[ -z "${VM_IP}" ]]; then
-    echo "[ERROR] Could not determine VM IP. Write domain manually:"
-    echo "  sudo sed -i 's|DOMAIN=.*|DOMAIN=https://${SITE_DOMAIN}|' /etc/secrets/wordpress.env"
-    exit 1
-fi
+Install the WordPress module. Prompts for the public domain then writes
+it to the VM and starts the container.
 
-echo "  Writing domain to VM (${VM_IP})..."
-ssh -o StrictHostKeyChecking=no "tappaas@${VM_IP}" \
-    "sudo sed -i 's|DOMAIN=.*|DOMAIN=https://${SITE_DOMAIN}|' /etc/secrets/wordpress.env && \
-     sudo systemctl restart wordpress-container"
+Arguments:
+    vmname    Name of the VM (must have config in /home/tappaas/config/)
 
-echo ""
-echo "  ✓ WordPress deployed at https://${SITE_DOMAIN}"
+Examples:
+    ${SCRIPT_NAME} wordpress
+EOF
+}
+
+# ── Main ───────────────────────────────────────────────────────────────
+
+main() {
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+        usage
+        exit 0
+    fi
+
+    if [[ -z "${1:-}" ]]; then
+        error "Module name is required"
+        usage
+        exit 1
+    fi
+
+    # ── Step 1: Prompt for public domain ──────────────────────────────
+    local tappaas_domain
+    tappaas_domain=$(jq -r '.tappaas.domain // empty' "${CONFIG_DIR}/configuration.json" 2>/dev/null || true)
+    local default_domain="wordpress.${tappaas_domain:-yourdomain.example}"
+
+    echo ""
+    info "WordPress public domain"
+    echo "  ────────────────────────────────────────────"
+    echo "  This will be the URL users access WordPress on."
+    echo "  Default: ${default_domain}"
+    echo ""
+    read -rp "  Domain [${default_domain}]: " input_domain
+    local site_domain="${input_domain:-${default_domain}}"
+
+    echo ""
+    echo "  ┌──────────────────────────────────────────┐"
+    echo "  │  Site domain : https://${site_domain}"
+    echo "  │  Upstream    : ${VM_HOST}:80"
+    echo "  │  Caddy wiring: auto via firewall:proxy"
+    echo "  └──────────────────────────────────────────┘"
+    echo ""
+    read -rp "  Confirm? [Y/n]: " confirm
+    confirm="${confirm:-Y}"
+    if [[ ! "${confirm}" =~ ^[Yy]$ ]]; then
+        info "Aborted."
+        exit 1
+    fi
+
+    # ── Step 2: Write domain to VM and start container ─────────────────
+    info "Writing domain to ${VM_HOST}..."
+    # shellcheck disable=SC2086
+    ssh ${SSH_OPTS} "tappaas@${VM_HOST}" \
+        "sudo sed -i 's|DOMAIN=.*|DOMAIN=https://${site_domain}|' /etc/secrets/wordpress.env && \
+         sudo systemctl restart wordpress-container"
+
+    echo ""
+    info "${GN}✓${CL} WordPress deployed at https://${site_domain}"
+}
+
+main "$@"

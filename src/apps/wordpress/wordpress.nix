@@ -17,20 +17,23 @@
 # - MariaDB 11.x backend
 # - Redis object cache (named instance, port 6380)
 #
-# Network: SRV zone (VLAN 210, 10.2.10.0/24)
+# Network: DMZ zone (VLAN 610, 10.6.0.0/24)
 # Firewall: ports 22 (SSH) + 8080 (WordPress HTTP)
-# Secrets: Auto-generated on first boot at /etc/secrets/wordpress.env
+# Secrets: Auto-generated on first boot at /etc/secrets/<vmName>.env
 # Backups: Daily DB dump + file archive, 30-day retention
+#
+# Rename: change vmName below — hostname, services, paths, and DB all follow.
 #
 # ============================================================================
 
 { config, lib, pkgs, modulesPath, ... }:
 
 let
+  vmName = "wordpress";  # ← change this one line to rename the VM and all its services
   versions = {
     wordpress = "6.7-fpm";
   };
-  secretsFile = "/etc/secrets/wordpress.env";
+  secretsFile = "/etc/secrets/${vmName}.env";
 in
 {
 
@@ -63,7 +66,7 @@ in
   # NETWORKING
   # ==========================================================================
 
-  networking.hostName = lib.mkDefault "wordpress";
+  networking.hostName = lib.mkDefault vmName;
   networking.networkmanager.enable = true;
   networking.networkmanager.ensureProfiles.profiles.tappaas-ethernet = {
     connection = { id = "tappaas-ethernet"; type = "ethernet"; autoconnect = "true"; autoconnect-priority = "100"; };
@@ -82,7 +85,7 @@ in
 
   networking.firewall = {
     enable          = true;
-    allowedTCPPorts = [ 22 8080 ];
+    allowedTCPPorts = [ 22 80 ];
   };
 
   # ==========================================================================
@@ -143,21 +146,24 @@ in
 
   services.nginx = {
     enable = true;
-    virtualHosts."wordpress" = {
-      listen = [{ addr = "0.0.0.0"; port = 8080; }];
-      root   = "/var/lib/wordpress";
+    virtualHosts."${vmName}" = {
+      listen = [{ addr = "0.0.0.0"; port = 80; }];
+      root   = "/var/lib/${vmName}";
       # Fix: without this nginx returns 403 on directory requests (e.g. /wp-admin/)
       # because it does not know to look for index.php inside subdirectories.
-      extraConfig = "index index.php index.html index.htm;";
+      extraConfig = ''
+        index index.php index.html index.htm;
+        client_max_body_size 128M;
+      '';
       locations."/" = {
         tryFiles = "$uri $uri/ /index.php?$args";
       };
       locations."~ \\.php$" = {
         extraConfig = ''
-          fastcgi_pass  unix:/run/phpfpm/wordpress.sock;
+          fastcgi_pass  127.0.0.1:9000;
           fastcgi_index index.php;
           include       ${pkgs.nginx}/conf/fastcgi_params;
-          fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+          fastcgi_param SCRIPT_FILENAME /var/www/html$fastcgi_script_name;
         '';
       };
       locations."~* \\.(css|js|png|jpg|webp|woff2|ico)$" = {
@@ -170,50 +176,26 @@ in
   };
 
   # ==========================================================================
-  # PHP-FPM
-  # ==========================================================================
-
-  services.phpfpm.pools.wordpress = {
-    user       = "nginx";
-    group      = "nginx";
-    phpPackage = pkgs.php83;
-    settings = {
-      "listen"                                         = "/run/phpfpm/wordpress.sock";
-      "listen.owner"                                   = "nginx";
-      "listen.group"                                   = "nginx";
-      "pm"                                             = "dynamic";
-      "pm.max_children"                                = 8;
-      "pm.start_servers"                               = 2;
-      "pm.min_spare_servers"                           = 2;
-      "pm.max_spare_servers"                           = 4;
-      "php_admin_value[opcache.enable]"                = 1;
-      "php_admin_value[opcache.memory_consumption]"    = 128;
-      "php_admin_value[opcache.max_accelerated_files]" = 4000;
-      "php_admin_value[opcache.revalidate_freq]"       = 60;
-    };
-  };
-
-  # ==========================================================================
   # SECRETS - auto-generated on first boot
   # ==========================================================================
 
-  systemd.services.generate-wordpress-secrets = {
+  systemd.services."generate-${vmName}-secrets" = {
     description = "Generate WordPress secret keys and DB password";
     wantedBy    = [ "multi-user.target" ];
     after       = [ "local-fs.target" ];
-    before      = [ "mysql.service" "wordpress-container.service" ];
+    before      = [ "mysql.service" "${vmName}-container.service" ];
     unitConfig.ConditionPathExists = "!${secretsFile}";
     serviceConfig = {
       Type            = "oneshot";
       RemainAfterExit = true;
-      ExecStart = pkgs.writeShellScript "generate-wordpress-secrets" ''
+      ExecStart = pkgs.writeShellScript "generate-${vmName}-secrets" ''
         mkdir -p /etc/secrets
         cat > ${secretsFile} <<EOF
 # WordPress runtime secrets - generated on first boot
-DOMAIN=https://wordpress.yourdomain.example
+DOMAIN=https://${vmName}.yourdomain.example
 WORDPRESS_DB_HOST=127.0.0.1
-WORDPRESS_DB_NAME=wordpress
-WORDPRESS_DB_USER=wordpress
+WORDPRESS_DB_NAME=${vmName}
+WORDPRESS_DB_USER=${vmName}
 WORDPRESS_DB_PASSWORD=$(${pkgs.openssl}/bin/openssl rand -base64 24)
 WORDPRESS_AUTH_KEY=$(${pkgs.openssl}/bin/openssl rand -base64 48)
 WORDPRESS_SECURE_AUTH_KEY=$(${pkgs.openssl}/bin/openssl rand -base64 48)
@@ -249,29 +231,33 @@ EOF
       slow_query_log_file     = "/var/log/mysql/slow.log";
       long_query_time         = 1;
     };
-    initialScript = pkgs.writeText "wordpress-db-init.sql" ''
-      CREATE DATABASE IF NOT EXISTS wordpress
+    initialScript = pkgs.writeText "${vmName}-db-init.sql" ''
+      CREATE DATABASE IF NOT EXISTS ${vmName}
         CHARACTER SET utf8mb4
         COLLATE utf8mb4_unicode_ci;
-      CREATE USER IF NOT EXISTS 'wordpress'@'localhost'
+      CREATE USER IF NOT EXISTS '${vmName}'@'localhost'
         IDENTIFIED BY 'PLACEHOLDER';
-      GRANT ALL PRIVILEGES ON wordpress.* TO 'wordpress'@'localhost';
+      CREATE USER IF NOT EXISTS '${vmName}'@'127.0.0.1'
+        IDENTIFIED BY 'PLACEHOLDER';
+      GRANT ALL PRIVILEGES ON ${vmName}.* TO '${vmName}'@'localhost';
+      GRANT ALL PRIVILEGES ON ${vmName}.* TO '${vmName}'@'127.0.0.1';
       FLUSH PRIVILEGES;
     '';
   };
 
-  systemd.services.wordpress-db-password-sync = {
+  systemd.services."${vmName}-db-password-sync" = {
     description = "Sync generated DB password into MariaDB";
-    after       = [ "mysql.service" "generate-wordpress-secrets.service" ];
+    after       = [ "mysql.service" "generate-${vmName}-secrets.service" ];
     wantedBy    = [ "multi-user.target" ];
-    before      = [ "wordpress-container.service" ];
+    before      = [ "${vmName}-container.service" ];
     serviceConfig = {
       Type            = "oneshot";
       RemainAfterExit = true;
-      ExecStart = pkgs.writeShellScript "wordpress-db-password-sync" ''
+      ExecStart = pkgs.writeShellScript "${vmName}-db-password-sync" ''
         source ${secretsFile}
         ${pkgs.mariadb}/bin/mysql -u root <<SQL
-          ALTER USER 'wordpress'@'localhost' IDENTIFIED BY '$WORDPRESS_DB_PASSWORD';
+          ALTER USER '${vmName}'@'localhost'   IDENTIFIED BY '$WORDPRESS_DB_PASSWORD';
+          ALTER USER '${vmName}'@'127.0.0.1'  IDENTIFIED BY '$WORDPRESS_DB_PASSWORD';
           FLUSH PRIVILEGES;
 SQL
       '';
@@ -282,15 +268,24 @@ SQL
   # REDIS
   # ==========================================================================
 
-  services.redis.servers.wordpress = {
+  services.redis.servers."${vmName}" = {
     enable   = true;
     port     = 6380;
     settings = {
       maxmemory        = 268435456;
       maxmemory-policy = "allkeys-lru";
-      save             = "";
+      save             = lib.mkForce "";
     };
   };
+
+  # PHP upload limits — mounted into the container as a custom ini file.
+  # Adjust upload_max_filesize and post_max_size together (post must be >= upload).
+  environment.etc."${vmName}-php/custom.ini".text = ''
+    upload_max_filesize = 128M
+    post_max_size       = 128M
+    max_execution_time  = 300
+    memory_limit        = 256M
+  '';
 
   # ==========================================================================
   # WORDPRESS CONTAINER
@@ -299,19 +294,25 @@ SQL
   virtualisation.podman.enable = true;
 
   systemd.tmpfiles.rules = [
-    "d /var/lib/wordpress         0750 nginx nginx -"
-    "d /var/backup/wordpress-db   0700 root  root  -"
-    "d /var/backup/wordpress-data 0700 root  root  -"
-    "d /var/log/mysql              0755 mysql mysql -"  # Fix: MariaDB slow log dir
+    # 33:33 = www-data inside the WordPress container (Debian-based image).
+    # 0755 lets host nginx read static files (other=r-x) while the container
+    # process can write uploads/plugins (owner=rwx). Do NOT use 0750/nginx here —
+    # PHP-FPM inside the container runs as uid 33, not the host nginx uid, and
+    # would get permission denied on every request.
+    "d /var/lib/${vmName}         0755 33    33    -"
+    "d /var/backup/${vmName}-db   0700 root  root  -"
+    "d /var/backup/${vmName}-data 0700 root  root  -"
+    "d /var/log/mysql              0755 mysql mysql -"
+    "d /etc/${vmName}-php          0755 root  root  -"
   ];
 
-  systemd.services.wordpress-container = {
+  systemd.services."${vmName}-container" = {
     description = "WordPress via Podman (PHP-FPM)";
     after = [
       "network.target"
       "mysql.service"
-      "generate-wordpress-secrets.service"
-      "wordpress-db-password-sync.service"
+      "generate-${vmName}-secrets.service"
+      "${vmName}-db-password-sync.service"
       "nginx.service"
     ];
     requires = [ "mysql.service" "nginx.service" ];
@@ -320,13 +321,13 @@ SQL
       ExecStartPre = "${pkgs.podman}/bin/podman pull docker.io/wordpress:${versions.wordpress}";
       ExecStart    = ''
         ${pkgs.podman}/bin/podman run --rm \
-          --name wordpress \
+          --name ${vmName} \
           --network host \
           --env-file ${secretsFile} \
           -e WORDPRESS_REDIS_HOST=127.0.0.1 \
           -e WORDPRESS_REDIS_PORT=6380 \
-          -v /var/lib/wordpress:/var/www/html \
-          -v /run/phpfpm/wordpress.sock:/run/phpfpm/wordpress.sock \
+          -v /var/lib/${vmName}:/var/www/html \
+          -v /etc/${vmName}-php/custom.ini:/usr/local/etc/php/conf.d/custom.ini:ro \
           docker.io/wordpress:${versions.wordpress}
       '';
 
@@ -350,9 +351,22 @@ SQL
       # -e OIDC_ENDPOINT_USERINFO_URL=https://authentik.<domain>/application/o/wordpress/userinfo \
       # -e OIDC_ENDPOINT_LOGOUT_URL=https://authentik.<domain>/application/o/wordpress/end-session \
 
-      ExecStop   = "${pkgs.podman}/bin/podman stop wordpress";
+      ExecStop   = "${pkgs.podman}/bin/podman stop ${vmName}";
       Restart    = "on-failure";
       RestartSec = "15s";
+
+      # Nginx (host) serves static files from /var/lib/${vmName} as "other".
+      # PHP-FPM (container, www-data uid 33) creates files as 0640 by default,
+      # which gives "other" no read access → 403 on all CSS/JS.
+      # Poll until WordPress has populated the directory, then open permissions.
+      ExecStartPost = pkgs.writeShellScript "${vmName}-fix-perms" ''
+        for i in $(seq 1 30); do
+          test -f /var/lib/${vmName}/wp-includes/version.php && break
+          sleep 2
+        done
+        find /var/lib/${vmName} -type f ! -perm -a+r -exec chmod a+r {} \;
+        find /var/lib/${vmName} -type d ! -perm -a+rx -exec chmod a+rx {} \;
+      '';
     };
   };
 
@@ -360,48 +374,48 @@ SQL
   # BACKUPS
   # ==========================================================================
 
-  systemd.services.backup-wordpress-db = {
+  systemd.services."backup-${vmName}-db" = {
     description = "Daily MariaDB dump for WordPress";
     serviceConfig = {
       Type      = "oneshot";
-      ExecStart = pkgs.writeShellScript "backup-wordpress-db" ''
-        ${pkgs.mariadb}/bin/mysqldump --single-transaction --routines wordpress \
-          | ${pkgs.gzip}/bin/gzip > /var/backup/wordpress-db/wordpress-$(date +%Y%m%d).sql.gz
+      ExecStart = pkgs.writeShellScript "backup-${vmName}-db" ''
+        ${pkgs.mariadb}/bin/mysqldump --single-transaction --routines ${vmName} \
+          | ${pkgs.gzip}/bin/gzip > /var/backup/${vmName}-db/${vmName}-$(date +%Y%m%d).sql.gz
       '';
     };
   };
-  systemd.timers.backup-wordpress-db = {
+  systemd.timers."backup-${vmName}-db" = {
     wantedBy    = [ "timers.target" ];
     timerConfig = { OnCalendar = "02:00"; Persistent = true; };
   };
 
-  systemd.services.backup-wordpress-data = {
+  systemd.services."backup-${vmName}-data" = {
     description = "Daily file archive for WordPress";
     serviceConfig = {
       Type      = "oneshot";
-      ExecStart = pkgs.writeShellScript "backup-wordpress-data" ''
+      ExecStart = pkgs.writeShellScript "backup-${vmName}-data" ''
         ${pkgs.gnutar}/bin/tar czf \
-          /var/backup/wordpress-data/wordpress-$(date +%Y%m%d).tar.gz \
-          /var/lib/wordpress
+          /var/backup/${vmName}-data/${vmName}-$(date +%Y%m%d).tar.gz \
+          /var/lib/${vmName}
       '';
     };
   };
-  systemd.timers.backup-wordpress-data = {
+  systemd.timers."backup-${vmName}-data" = {
     wantedBy    = [ "timers.target" ];
     timerConfig = { OnCalendar = "02:30"; Persistent = true; };
   };
 
-  systemd.services.backup-wordpress-cleanup = {
+  systemd.services."backup-${vmName}-cleanup" = {
     description = "Remove WordPress backups older than 30 days";
     serviceConfig = {
       Type      = "oneshot";
-      ExecStart = pkgs.writeShellScript "backup-wordpress-cleanup" ''
-        ${pkgs.findutils}/bin/find /var/backup/wordpress-db   -mtime +30 -delete
-        ${pkgs.findutils}/bin/find /var/backup/wordpress-data -mtime +30 -delete
+      ExecStart = pkgs.writeShellScript "backup-${vmName}-cleanup" ''
+        ${pkgs.findutils}/bin/find /var/backup/${vmName}-db   -mtime +30 -delete
+        ${pkgs.findutils}/bin/find /var/backup/${vmName}-data -mtime +30 -delete
       '';
     };
   };
-  systemd.timers.backup-wordpress-cleanup = {
+  systemd.timers."backup-${vmName}-cleanup" = {
     wantedBy    = [ "timers.target" ];
     timerConfig = { OnCalendar = "monthly"; Persistent = true; };
   };
